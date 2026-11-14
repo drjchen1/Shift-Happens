@@ -266,8 +266,8 @@
             <div class="grid-4">
                 <div class="card">
                     <i data-lucide="files" style="width: 28px; height: 28px;"></i>
-                    <strong>Use Three Source Files</strong>
-                    <p>Standard departmental ingestion using <code>people.csv</code> (unavailability & preferences), <code>teaching.csv</code> (course sections), and <code>mrr.csv</code> (MRR staff).</p>
+                    <strong>Use Department Files</strong>
+                    <p>Drop the files exactly as downloaded: the Qualtrics survey export(s) (add both fall surveys if there are two) and the full UniTime offerings export. Then paste the special MRR-only TAs, one per line (or drop Dom's MRR list CSV). Files are recognized by their contents. Shift Happens keeps only TAs who teach MRR courses, skips faculty, coordinators, LTLs, and the MA 15300 undergraduate instructors (graduate TAs teaching 15300 are kept), computes hours (15300/15800/16010/16020: one hour per two sections, rounded up; other MRR courses: one per section; MRR-only TAs: 10), and blocks both survey times and every class each TA teaches. An <strong>Import summary</strong> above the roster lists anything a person should check, such as teaching TAs missing from every survey. The older hand-prepared <code>people.csv</code> / <code>teaching.csv</code> / <code>mrr.csv</code> files still work.</p>
                 </div>
                 <div class="card">
                     <i data-lucide="file-spreadsheet" style="width: 28px; height: 28px; color: var(--success);"></i>

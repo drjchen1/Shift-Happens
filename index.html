@@ -135,8 +135,8 @@
                             <div class="option-card-icon" style="background: var(--primary)15;">
                                 <i data-lucide="files" style="color: var(--primary);"></i>
                             </div>
-                            <h3>Use three source files</h3>
-                            <p>For the departmental people, teaching, and MRR workflow.</p>
+                            <h3>Use department files</h3>
+                            <p>Drop the Qualtrics survey and UniTime offerings exports as downloaded. No editing needed.</p>
                         </div>
 
                         <!-- Option 3: Start from Scratch -->
@@ -299,19 +299,28 @@
                             <button class="btn btn-ghost" onclick="backToLanding()">
                                 <i data-lucide="arrow-left"></i>
                             </button>
-                            <h2>Upload Required CSVs</h2>
+                            <h2>Upload department files</h2>
                         </div>
                         <div class="upload-zone" id="dropzone">
                             <i data-lucide="upload-cloud"
                                 style="width: 48px; height: 48px; color: var(--primary); margin-bottom: 16px;"></i>
-                            <p style="font-weight: 600;">Click or drag to upload required CSVs</p>
+                            <p style="font-weight: 600;">Click or drag the files exactly as downloaded</p>
                             <p style="font-size: 0.875rem; color: var(--text-muted); margin-top: 8px;">
-                                Required: people.csv, mrr.csv, teaching.csv
+                                Qualtrics survey export(s) &middot; UniTime offerings export &middot; special MRR TA list (optional)
+                            </p>
+                            <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">
+                                Files are recognized by their contents, so names don't matter. Add both fall surveys if there are two.
+                                The older people.csv / teaching.csv / mrr.csv files still work.
                             </p>
                             <input type="file" id="file-input" multiple accept=".csv" style="display: none;">
                         </div>
                         <div id="file-list" style="margin-top: 24px; display: flex; flex-direction: column; gap: 8px;">
                         </div>
+                        <label for="mrr-paste" style="display: block; margin-top: 20px; font-size: 0.85rem; font-weight: 600;">
+                            Special MRR-only TAs <span style="font-weight: 400; color: var(--text-muted);">(instead of an MRR file: one name per line, optional hours, e.g. "Kavouras, Andreas 10")</span>
+                        </label>
+                        <textarea id="mrr-paste" rows="4" placeholder="Kavouras, Andreas&#10;Moshe, Rivkah"
+                            style="width: 100%; margin-top: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--card-bg); color: var(--text); font: inherit; font-size: 0.85rem; resize: vertical;"></textarea>
                         <button class="btn btn-primary" id="start-btn"
                             style="width: 100%; margin-top: 24px; justify-content: center;" disabled>
                             Generate Preview
@@ -378,6 +387,7 @@
                             </button>
                         </div>
 
+                        <div id="import-report"></div>
                         <p style="margin-bottom: 16px; color: var(--text-muted);">
                             Verify the extracted instructor data before configuring and generating the schedule.
                         </p>
@@ -516,12 +526,14 @@
     </div>
 
     <script src="scheduler-constraints.js"></script>
+    <script src="department-import.js"></script>
     <script src="app.js"></script>
     <script src="scheduler-ui.js"></script>
     <script>
         // UI Handler integration for app.js
         let optimizationBannerShown = false;
-        const files = { people: null, mrr: null, teaching: null };
+        // people holds every survey file (fall has two: main survey + TA-screening survey).
+        const files = { people: [], mrr: null, teaching: null };
         const dropzone = document.getElementById('dropzone');
         const fileInput = document.getElementById('file-input');
         const startBtn = document.getElementById('start-btn');
@@ -1043,7 +1055,7 @@
 
         function resetToLanding() {
             if (!confirm("Return to the start screen? This will clear the current schedule and uploaded data.")) return;
-            files.people = null;
+            files.people = [];
             files.mrr = null;
             files.teaching = null;
             updateFileList();
@@ -1172,38 +1184,48 @@
             };
         }
 
-        function handleFiles(fileList) {
-            const detectFileType = (filename) => {
-                const lower = String(filename || '').toLowerCase().trim();
-                const base = lower.replace(/\.[^.]+$/, '');
-                const tokens = base.split(/[^a-z0-9]+/).filter(Boolean);
+        async function sniffFileType(file) {
+            // Recognize the raw department exports by their contents.
+            try {
+                const head = await file.slice(0, 20000).text();
+                const firstLine = head.split(/\r?\n/, 1)[0];
+                if (/(^|,)"?ResponseId"?(,|$)/.test(firstLine) || /(^|,)"?Q1_\d+_\d+"?(,|$)/.test(firstLine)) return 'people';
+                if (/Offered Courses/i.test(head.slice(0, 200)) || (/External Id/.test(head) && /\(Instr\)/.test(head))) return 'teaching';
+                if (/name_last|hours working in mrr/i.test(firstLine)) return 'mrr';
+            } catch (err) {
+                console.warn('Could not read file header', err);
+            }
+            return null;
+        }
 
-                const matches = [];
-                if (tokens.includes('people') || tokens.includes('survey')) matches.push('people');
-                if (tokens.includes('mrr')) matches.push('mrr');
-                if (tokens.includes('teaching') || tokens.includes('teach') || tokens.includes('section') || tokens.includes('sections')) matches.push('teaching');
+        function detectFileTypeByName(filename) {
+            const lower = String(filename || '').toLowerCase().trim();
+            const base = lower.replace(/\.[^.]+$/, '');
+            const tokens = base.split(/[^a-z0-9]+/).filter(Boolean);
+            const matches = [];
+            if (tokens.includes('people') || tokens.includes('survey')) matches.push('people');
+            if (tokens.includes('mrr')) matches.push('mrr');
+            if (['teaching', 'teach', 'section', 'sections', 'offerings', 'offering'].some(t => tokens.includes(t))) matches.push('teaching');
+            return matches.length === 1 ? matches[0] : null;
+        }
 
-                if (matches.length === 1) return matches[0];
-
-                // Fallback for common exact naming when tokenization is unusual.
-                if (/^people(\.csv)?$/.test(lower)) return 'people';
-                if (/^mrr(\.csv)?$/.test(lower)) return 'mrr';
-                if (/^teaching(\.csv)?$/.test(lower)) return 'teaching';
-                return null;
-            };
-
+        async function handleFiles(fileList) {
             const unrecognized = [];
-            Array.from(fileList).forEach(file => {
-                const type = detectFileType(file.name);
+            for (const file of Array.from(fileList)) {
+                const type = (await sniffFileType(file)) || detectFileTypeByName(file.name);
                 if (!type) {
                     unrecognized.push(file.name);
-                    return;
+                    continue;
                 }
-                files[type] = file;
-            });
+                if (type === 'people') {
+                    if (!files.people.some(f => f.name === file.name && f.size === file.size)) files.people.push(file);
+                } else {
+                    files[type] = file;
+                }
+            }
             updateFileList();
             if (unrecognized.length) {
-                alert(`Could not classify: ${unrecognized.join(', ')}.\nUse filenames containing one clear type keyword: people, mrr, or teaching.`);
+                alert(`Could not recognize: ${unrecognized.join(', ')}.\nExpected a Qualtrics survey export, a UniTime offerings export, or an MRR list.`);
             }
         }
 
@@ -1211,28 +1233,76 @@
             const list = document.getElementById('file-list');
             if (!list) return;
             list.innerHTML = '';
-            Object.entries(files).forEach(([type, file]) => {
+            const rows = [
+                ['Survey (Qualtrics)', files.people.length ? files.people.map(f => f.name).join(', ') : null, true],
+                ['Offerings (UniTime)', files.teaching ? files.teaching.name : null, true],
+                ['MRR-only TAs', files.mrr ? files.mrr.name : null, false]
+            ];
+            rows.forEach(([label, value, required]) => {
                 const item = document.createElement('div');
                 item.className = 'btn btn-ghost';
                 item.style.width = '100%';
                 item.style.justifyContent = 'flex-start';
-                item.innerHTML = `<i data-lucide="${file ? 'check-circle' : 'circle'}" style="color: ${file ? 'var(--success)' : 'var(--border)'}"></i> ${type}.csv ${file ? '- ' + file.name : '(missing)'}`;
+                item.style.textAlign = 'left';
+                const icon = value ? 'check-circle' : 'circle';
+                const color = value ? 'var(--success)' : 'var(--border)';
+                const status = value ? value : (required ? '(missing)' : '(optional \u2014 or paste names below)');
+                item.innerHTML = `<i data-lucide="${icon}" style="color: ${color}"></i> <span><strong>${label}</strong> ${status.replace(/</g, '&lt;')}</span>`;
                 list.appendChild(item);
             });
             lucide.createIcons();
-            startBtn.disabled = !(files.people && files.mrr && files.teaching);
+            refreshStartButton();
         }
+
+        function refreshStartButton() {
+            if (!startBtn) return;
+            const pasted = (document.getElementById('mrr-paste')?.value || '').trim();
+            startBtn.disabled = !(files.people.length && files.teaching && (files.mrr || pasted));
+        }
+        document.getElementById('mrr-paste')?.addEventListener('input', refreshStartButton);
+        updateFileList();
 
         if (startBtn) {
             startBtn.onclick = async () => {
-                const parse = (file, hasHeader = true) => new Promise(res => Papa.parse(file, { header: hasHeader, skipEmptyLines: true, complete: res }));
-                const [p, m, t] = await Promise.all([
-                    parse(files.people),
-                    parse(files.mrr),
-                    parse(files.teaching, false) // teaching.csv HAS NO HEADERS
-                ]);
+                const parse = (file, hasHeader) => new Promise(res => Papa.parse(file, { header: hasHeader, skipEmptyLines: true, complete: res }));
+                const surveyRaw = await Promise.all(files.people.map(f => parse(f, false)));
+                const teachingRaw = await parse(files.teaching, false);
+                const pasted = (document.getElementById('mrr-paste')?.value || '').trim();
+                const Import = window.ShiftHappensImport;
 
-                window.scheduler.processFiles(p.data, m.data, t.data);
+                const isRawExport = Import && surveyRaw.every(r => Import.isQualtricsExport(r.data));
+                if (isRawExport) {
+                    // Department path: untouched Qualtrics + UniTime exports.
+                    let mrrRows = [];
+                    if (files.mrr) mrrRows = (await parse(files.mrr, true)).data;
+                    const mrrFromFile = Import.parseMrrList(mrrRows, Import.DEFAULT_RULES.mrrOnlyHours);
+                    const mrrText = [
+                        ...mrrFromFile.map(m => `${m.last}, ${m.first} ${m.hours}`),
+                        pasted
+                    ].filter(Boolean).join('\n');
+                    try {
+                        const result = Import.buildRoster({
+                            surveys: surveyRaw.map(r => r.data),
+                            surveyNames: files.people.map(f => f.name),
+                            offerings: teachingRaw.data,
+                            mrr: mrrText
+                        });
+                        window.scheduler.loadImportedRoster(result.instructors, result.report);
+                    } catch (err) {
+                        console.error(err);
+                        alert(`Import failed: ${err.message}`);
+                    }
+                    return;
+                }
+
+                // Legacy path: hand-prepared people.csv / mrr.csv / teaching.csv.
+                const [p, m] = await Promise.all([
+                    parse(files.people[0], true),
+                    files.mrr ? parse(files.mrr, true) : Promise.resolve({ data: [] })
+                ]);
+                const mrrData = m.data.length ? m.data
+                    : (Import ? Import.parseMrrList(pasted, 10).map(x => ({ name_last: x.last, name_first: x.first, hours: x.hours })) : []);
+                window.scheduler.processFiles(p.data, mrrData, teachingRaw.data);
             };
         }
 
@@ -1297,9 +1367,15 @@
         window.scheduler.onPreview = (state) => {
             setAppStage('preview');
 
+            if (window.ShiftHappensUI && window.ShiftHappensUI.renderImportReport) {
+                window.ShiftHappensUI.renderImportReport(state.importReport);
+            }
+            const escapeText = value => String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
             const list = document.getElementById('preview-list');
             list.innerHTML = state.instructors.map((inst, idx) => `
-                <div class="preview-item" style="background: var(--background); padding: 16px; border-radius: 12px; border: 1px solid var(--border); display: flex; flex-direction: column; gap: 12px;">
+                <div class="preview-item" style="background: var(--background); padding: 16px; border-radius: 12px; border: 1px solid ${inst.importWarning ? 'var(--warning)' : 'var(--border)'}; display: flex; flex-direction: column; gap: 12px;">
+                    ${inst.importWarning ? `<div style="font-size: 0.78rem; color: #92400e; background: #fffbeb; border-radius: 6px; padding: 4px 8px;">&#9888; ${escapeText(inst.importWarning)}</div>` : ''}
+                    ${inst.notes ? `<div style="font-size: 0.78rem; color: var(--text-muted);"><strong>Survey note:</strong> ${escapeText(inst.notes)}</div>` : ''}
                     <div style="display: flex; gap: 12px; align-items: center;">
                         <input type="text" value="${inst.name}" id="inst-name-${idx}"
                                style="background: transparent; border: none; font-weight: 800; font-size: 1rem; color: var(--text); border-bottom: 2px solid transparent; flex: 1; transition: border-color 0.2s;"

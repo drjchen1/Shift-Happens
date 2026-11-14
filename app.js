@@ -710,7 +710,8 @@ class ShiftHappensScheduler {
             if (row && !Array.isArray(row)) {
                 Object.keys(row).forEach(col => {
                     const match = col.match(/- (\d+):(\d+)(am|pm)-\d+:\d+(am|pm) - (\w+)/);
-                    if (match && String(row[col]).toLowerCase().trim() === 'x') {
+                    // Any mark counts: respondents type "X", "x", "XX", even "1".
+                    if (match && String(row[col] || '').trim() !== '') {
                         let h = parseInt(match[1]);
                         const m = match[2];
                         const ampm = match[3];
@@ -743,9 +744,12 @@ class ShiftHappensScheduler {
             const timeCell = vals.find(v => /\d{1,2}:\d{2}\s*[ap]m?-\d{1,2}:\d{2}\s*[ap]m?/i.test(String(v || ""))) || vals[3];
 
             if (instrCell) {
-                const name = String(instrCell).replace("(Instr)", "").trim();
                 const times = [];
-                if (timeCell) {
+                const Import = (typeof window !== 'undefined') && window.ShiftHappensImport;
+                if (timeCell && Import) {
+                    // Block every hourly slot the class overlaps (75-minute TTh classes span two).
+                    Import.blockedSlots(Import.parseMeeting(timeCell)).forEach(t => times.push(t));
+                } else if (timeCell) {
                     const parts = String(timeCell).trim().split(' ');
                     if (parts.length >= 2) {
                         const daysRaw = parts[0];
@@ -754,9 +758,12 @@ class ShiftHappensScheduler {
                         this.parseDays(daysRaw).forEach(d => times.push(`${d} ${time24}`));
                     }
                 }
-                if (!instructorData[name]) instructorData[name] = { course: currentCourse, sections: 0, teachingTimes: new Set() };
-                instructorData[name].sections += 1;
-                times.forEach(t => instructorData[name].teachingTimes.add(t));
+                // Co-taught sections list one "(Instr)" per line (e.g. coordinator + TA).
+                String(instrCell).split(/\n+/).map(n => n.replace(/\(Instr\)/gi, "").trim()).filter(Boolean).forEach(name => {
+                    if (!instructorData[name]) instructorData[name] = { course: currentCourse, sections: 0, teachingTimes: new Set() };
+                    instructorData[name].sections += 1;
+                    times.forEach(t => instructorData[name].teachingTimes.add(t));
+                });
             }
         });
 
@@ -815,6 +822,7 @@ class ShiftHappensScheduler {
         });
 
         this.state.history = []; // Clear history on new generation
+        this.state.importReport = null;
         this.state.instructors = finalInstructors;
         this.ensureInstructorIds();
         this.computeCoreCourses();
@@ -1261,12 +1269,30 @@ class ShiftHappensScheduler {
         });
 
         this.state.history = [];
+        this.state.importReport = null;
+        this.ensureInstructorIds();
+        this.computeCoreCourses();
+        if (this.onPreview) this.onPreview(this.state);
+    }
+
+    // Roster built by department-import.js from the raw Qualtrics + UniTime exports.
+    loadImportedRoster(instructors, report) {
+        this.state.instructors = (instructors || []).map(inst => ({
+            assignments: [],
+            unavail: [],
+            pref: 'No preference',
+            ...inst,
+            id: null
+        }));
+        this.state.importReport = report || null;
+        this.state.history = [];
         this.ensureInstructorIds();
         this.computeCoreCourses();
         if (this.onPreview) this.onPreview(this.state);
     }
 
     startFromEmpty() {
+        this.state.importReport = null;
         this.state.instructors = [];
         this.state.history = [];
         this.computeCoreCourses();
@@ -1283,7 +1309,8 @@ class ShiftHappensScheduler {
             (inst.unavail || []).join(', ')
         ]);
 
-        return [headers, ...rows].map(row => row.map(cell => `"${cell}"`).join(',')).join('\n');
+        const quote = cell => `"${String(cell == null ? '' : cell).replace(/"/g, '""')}"`;
+        return [headers, ...rows].map(row => row.map(quote).join(',')).join('\n');
     }
 
     exportSessionJSON() {
@@ -1356,7 +1383,7 @@ class ShiftHappensScheduler {
         }
 
         this.hydrateLegacyScheduleEntries();
-
+        this.state.importReport = null;
         this.state.history = [];
         this.computeCoreCourses();
         this.saveHistory();
@@ -1460,7 +1487,7 @@ class ShiftHappensScheduler {
         const weights = this.getComputedWeights();
         let score = (schedule[d][t].length ** 2) * weights.balanceMultiplier;
 
-        if (weights.diversityBonus > 0 && !schedule[d][t].some(s => s.name !== person.name && s.course === person.course)) {
+        if (weights.diversityBonus > 0 && !schedule[d][t].some(s => !this.entryMatchesInstructor(s, person) && s.course === person.course)) {
             score -= weights.diversityBonus;
         }
 

@@ -40,7 +40,7 @@ The start screen asks only how you want to begin. After the roster is loaded, th
 
 | Step | What happens |
 | :--- | :--- |
-| **1. Choose a source** | Upload a consolidated roster CSV, use the people/teaching/MRR three-file workflow, build a roster manually, or load a saved session. |
+| **1. Choose a source** | Upload a consolidated roster CSV, drop the raw department files (Qualtrics + UniTime + MRR list), build a roster manually, or load a saved session. |
 | **2. Review the roster** | Check instructors, required hours, preferences, and unavailable slots. |
 | **3. Configure the schedule** | Set operating days and times, scheduling priorities, and the courses that require coverage. |
 | **4. Generate and refine** | Create the initial schedule, review feasibility and coverage alerts, then drag, swap, save, print, or export. |
@@ -86,12 +86,15 @@ Shift-Happens/
 ├── index.html                  # Main application UI, modal stages, and controller
 ├── app.js                      # Core scheduling engine, data parsing, optimization algorithms
 ├── scheduler-constraints.js    # Feasibility analysis and constraint explanations
-├── scheduler-ui.js             # Reusable schedule-level UI rendering
+├── scheduler-ui.js             # Reusable schedule-level UI rendering (feasibility + import summary)
+├── department-import.js        # Raw Qualtrics + UniTime + MRR list -> roster, with department rules
 ├── style.css                   # Responsive layout, light/dark themes, print media queries
 ├── Shift_Happens_Help.html     # Interactive handbook and operational documentation
 ├── package.json                # Test runner configuration
 ├── tests/
-│   └── scheduler.smoke.test.js # Automated unit and regression test suite
+│   ├── scheduler.smoke.test.js # Automated unit and regression test suite
+│   ├── department-import.test.js # Raw-export import tests (synthetic data only)
+│   └── csv.js                  # Tiny CSV reader used by tests
 ├── anonymized_mrr_scheduler_input.csv # Consolidated example input
 └── sample_math_practice.csv    # Small, math-themed practice schedule
 ```
@@ -136,7 +139,21 @@ Course coverage, room balance, course variety, and back-to-back preferences are 
 
 ### Input and session compatibility
 
-The app accepts the consolidated CSV downloaded from the interface, or the three-file people/MRR/teaching workflow. Sessions are saved as JSON and include stable instructor IDs. Older sessions that do not contain IDs can still be opened; they are assigned IDs on import. When old sessions contain duplicate names, re-save the imported session before editing so subsequent actions retain the new identities.
+The app accepts the consolidated CSV downloaded from the interface, or the department files.
+
+#### Department files (no hand-editing)
+
+`department-import.js` reads the **untouched** exports:
+
+- **Qualtrics survey export(s)**: all three header rows and all columns. Any mark in the availability grid counts (`X`, `x`, `XX`, `1`). Duplicate submissions collapse to the latest. Several surveys (e.g. main + TA-screening) can be combined.
+- **UniTime offerings export** for the whole department. Co-taught cells are split, and every hourly slot a class overlaps is blocked, including classes in non-MRR courses.
+- **Special MRR-only TAs**: paste names (one per line, optional hours) or drop the list CSV (`name_last`, `name_first`, hours).
+
+Department rules live in `DEFAULT_RULES` at the top of `department-import.js` (MRR courses, hours per section, rounding, LTL exclusion, MRR-only hours). Faculty are recognized because they never take the TA survey. MA 15300 is normally taught by undergraduate math-education majors and lecturers who neither take the survey nor work in the MRR; they are skipped quietly (`nonSurveyInstructorCourses`). Graduate TAs who fill a 15300 shortfall take the survey, so they are matched and get one MRR hour per two sections. Teaching TAs missing from every survey are still scheduled with only their class times blocked, and they are flagged in the Import summary.
+
+**Privacy:** the raw exports contain phone numbers and PUIDs. `.gitignore` keeps them out of the repository. Never commit them.
+
+The legacy hand-prepared three-file people/MRR/teaching workflow still works. Sessions are saved as JSON and include stable instructor IDs. Older sessions that do not contain IDs can still be opened; they are assigned IDs on import. When old sessions contain duplicate names, re-save the imported session before editing so subsequent actions retain the new identities.
 
 For a quick, low-stakes first run, download [sample_math_practice.csv](sample_math_practice.csv). It contains 16 fictional instructors, a variety of course types and preferences, availability constraints, and MRR staff.
 
