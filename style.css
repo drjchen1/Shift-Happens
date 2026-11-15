@@ -1141,3 +1141,44 @@ body {
         display: none !important;
     }
 }
+
+/* Disabled buttons must look disabled */
+.btn:disabled,
+.btn[disabled] {
+    opacity: 0.45;
+    cursor: not-allowed;
+    filter: grayscale(0.4);
+}
+
+/* Department-files upload list */
+.file-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 14px;
+    min-width: 0;
+}
+.file-row-icon {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    margin-top: 1px;
+}
+.file-row-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.file-row-name {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+}
+.file-row-missing {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    font-style: italic;
+}

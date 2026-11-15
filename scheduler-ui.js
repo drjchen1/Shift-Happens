@@ -37,6 +37,7 @@
             { title: 'Teaching TAs not found in any survey (only their class times are blocked)', items: report.teachingNoSurvey, warn: true,
               hint: 'In the fall, make sure both surveys (continuing TAs and TA screening) were added. Otherwise enter their unavailable times below.' },
             { title: 'MRR-only TAs not found in any survey', items: report.mrrNotInSurvey, warn: true },
+            { title: 'No MRR-only TAs entered', items: report.noMrrOnly ? ['Add them with "Add Staff" below, or go back and paste their names.'] : [], warn: true },
             { title: 'Ambiguous name matches', items: report.ambiguousMatches, warn: true },
             { title: 'Survey availability entries that could not be read', items: report.unreadableAvailability, warn: true },
             { title: 'MRR-course sections with no instructor in UniTime', items: report.sectionsWithoutInstructor, warn: true },

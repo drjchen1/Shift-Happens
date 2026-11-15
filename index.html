@@ -325,6 +325,7 @@
                             style="width: 100%; margin-top: 24px; justify-content: center;" disabled>
                             Generate Preview
                         </button>
+                        <p id="start-hint" aria-live="polite" style="margin-top: 8px; font-size: 0.8rem; color: var(--text-muted); text-align: center;"></p>
                     </div>
                 </div>
 
@@ -1238,16 +1239,16 @@
                 ['Offerings (UniTime)', files.teaching ? files.teaching.name : null, true],
                 ['MRR-only TAs', files.mrr ? files.mrr.name : null, false]
             ];
+            const esc = v => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;');
             rows.forEach(([label, value, required]) => {
                 const item = document.createElement('div');
-                item.className = 'btn btn-ghost';
-                item.style.width = '100%';
-                item.style.justifyContent = 'flex-start';
-                item.style.textAlign = 'left';
-                const icon = value ? 'check-circle' : 'circle';
-                const color = value ? 'var(--success)' : 'var(--border)';
-                const status = value ? value : (required ? '(missing)' : '(optional \u2014 or paste names below)');
-                item.innerHTML = `<i data-lucide="${icon}" style="color: ${color}"></i> <span><strong>${label}</strong> ${status.replace(/</g, '&lt;')}</span>`;
+                item.className = 'file-row';
+                const done = Boolean(value);
+                const status = done
+                    ? value.split(', ').map(n => `<span class="file-row-name">${esc(n)}</span>`).join('')
+                    : `<span class="file-row-missing">${required ? 'missing' : 'optional \u2014 or paste names below'}</span>`;
+                item.innerHTML = `<i data-lucide="${done ? 'check-circle' : 'circle'}" class="file-row-icon" style="color: ${done ? 'var(--success)' : 'var(--border)'}"></i>
+                    <div class="file-row-body"><strong>${label}</strong>${status}</div>`;
                 list.appendChild(item);
             });
             lucide.createIcons();
@@ -1257,13 +1258,23 @@
         function refreshStartButton() {
             if (!startBtn) return;
             const pasted = (document.getElementById('mrr-paste')?.value || '').trim();
-            startBtn.disabled = !(files.people.length && files.teaching && (files.mrr || pasted));
+            const missing = [];
+            if (!files.people.length) missing.push('a Qualtrics survey export');
+            if (!files.teaching) missing.push('the UniTime offerings export');
+            startBtn.disabled = missing.length > 0;
+            const hint = document.getElementById('start-hint');
+            if (hint) {
+                hint.textContent = missing.length
+                    ? `Still needed: ${missing.join(' and ')}.`
+                    : (files.mrr || pasted ? '' : 'No MRR-only TAs entered \u2014 you can still continue and add them on the next screen.');
+            }
         }
         document.getElementById('mrr-paste')?.addEventListener('input', refreshStartButton);
         updateFileList();
 
         if (startBtn) {
             startBtn.onclick = async () => {
+              try {
                 const parse = (file, hasHeader) => new Promise(res => Papa.parse(file, { header: hasHeader, skipEmptyLines: true, complete: res }));
                 const surveyRaw = await Promise.all(files.people.map(f => parse(f, false)));
                 const teachingRaw = await parse(files.teaching, false);
@@ -1303,6 +1314,10 @@
                 const mrrData = m.data.length ? m.data
                     : (Import ? Import.parseMrrList(pasted, 10).map(x => ({ name_last: x.last, name_first: x.first, hours: x.hours })) : []);
                 window.scheduler.processFiles(p.data, mrrData, teachingRaw.data);
+              } catch (err) {
+                console.error(err);
+                alert(`Could not build the roster: ${err.message}`);
+              }
             };
         }
 

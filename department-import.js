@@ -611,6 +611,7 @@
             report.mrrOnly.push({ name, required: m.hours, notes: person ? person.notes : '' });
         });
 
+        report.noMrrOnly = mrrList.length === 0;
         return { instructors, report, people, sections };
     }
 
