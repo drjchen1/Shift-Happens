@@ -451,7 +451,7 @@
 
     // ---------- MRR-only list ----------
     /* Accepts CSV rows with headers (name_last/name_first/hours, or Name/Hours),
-     * OR plain text with one name per line ("Kavouras, Andreas" / "Andreas Kavouras 10"). */
+     * OR plain text with one name per line ("Last, First" / "First Last 10"). */
     function parseMrrList(input, defaultHours) {
         const out = [];
         if (Array.isArray(input)) {
