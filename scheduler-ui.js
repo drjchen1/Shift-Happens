@@ -35,15 +35,16 @@
 
         const groups = [
             { title: 'Teaching TAs not found in any survey (only their class times are blocked)', items: report.teachingNoSurvey, warn: true,
-              hint: 'Usually means the second survey (TA screening) was not uploaded. Add it, or enter their unavailable times below.' },
+              hint: 'In the fall, make sure both surveys (continuing TAs and TA screening) were added. Otherwise enter their unavailable times below.' },
             { title: 'MRR-only TAs not found in any survey', items: report.mrrNotInSurvey, warn: true },
             { title: 'Ambiguous name matches', items: report.ambiguousMatches, warn: true },
+            { title: 'Survey availability entries that could not be read', items: report.unreadableAvailability, warn: true },
             { title: 'MRR-course sections with no instructor in UniTime', items: report.sectionsWithoutInstructor, warn: true },
             { title: 'Skipped: faculty, coordinators, large lectures (not in the TA survey)', items: report.skippedNotInSurvey },
             { title: 'Skipped: limited-term lecturers', items: report.skippedLTL },
             { title: 'Skipped: MA 15300 undergraduate instructors (no survey, no MRR)', items: report.skippedUndergrad },
             { title: 'Matched despite name differences', items: report.fuzzyMatches },
-            { title: 'Duplicate survey responses (latest kept)', items: report.duplicateResponses },
+            { title: 'Repeat survey responses (latest kept)', items: report.duplicateResponses },
             { title: 'Included teaching TAs', items: report.included.map(i => `${label(i)} \u2192 ${i.required} h`) },
             { title: 'Included MRR-only TAs', items: report.mrrOnly.map(i => `${i.name} \u2192 ${i.required} h`) }
         ].filter(g => g.items && g.items.length);
@@ -54,7 +55,7 @@
         box.innerHTML = `
             <div style="font-weight: 700; margin-bottom: 6px;">Import summary</div>
             <div style="color: var(--text-muted); margin-bottom: 8px;">
-                ${report.surveyResponses} survey responses and ${report.sectionsRead} sections read &rarr;
+                ${report.surveyResponses} survey responses (${report.surveyPeople} people) and ${report.sectionsRead} sections read &rarr;
                 <strong>${report.included.length}</strong> teaching TAs + <strong>${report.mrrOnly.length}</strong> MRR-only TAs,
                 ${hours} MRR hours in total.
                 ${warnCount

@@ -136,7 +136,7 @@
                                 <i data-lucide="files" style="color: var(--primary);"></i>
                             </div>
                             <h3>Use department files</h3>
-                            <p>Drop the Qualtrics survey and UniTime offerings exports as downloaded. No editing needed.</p>
+                            <p>Drop the Qualtrics survey(s) and UniTime offerings exports as downloaded. No editing needed.</p>
                         </div>
 
                         <!-- Option 3: Start from Scratch -->
@@ -309,8 +309,8 @@
                                 Qualtrics survey export(s) &middot; UniTime offerings export &middot; special MRR TA list (optional)
                             </p>
                             <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 4px;">
-                                Files are recognized by their contents, so names don't matter. Add both fall surveys if there are two.
-                                The older people.csv / teaching.csv / mrr.csv files still work.
+                                Files are recognized by their contents, so names don't matter. In the fall, add both surveys
+                                (continuing TAs and TA screening). The older people.csv / teaching.csv / mrr.csv files still work.
                             </p>
                             <input type="file" id="file-input" multiple accept=".csv" style="display: none;">
                         </div>
@@ -532,7 +532,7 @@
     <script>
         // UI Handler integration for app.js
         let optimizationBannerShown = false;
-        // people holds every survey file (fall has two: main survey + TA-screening survey).
+        // people holds every survey file (fall has two: continuing TAs + TA screening).
         const files = { people: [], mrr: null, teaching: null };
         const dropzone = document.getElementById('dropzone');
         const fileInput = document.getElementById('file-input');
@@ -1189,7 +1189,7 @@
             try {
                 const head = await file.slice(0, 20000).text();
                 const firstLine = head.split(/\r?\n/, 1)[0];
-                if (/(^|,)"?ResponseId"?(,|$)/.test(firstLine) || /(^|,)"?Q1_\d+_\d+"?(,|$)/.test(firstLine)) return 'people';
+                if (/(^|,)"?ResponseId"?(,|$)/.test(firstLine) || /(^|,)"?Q1_\d+(_\d+)?"?(,|$)/.test(firstLine)) return 'people';
                 if (/Offered Courses/i.test(head.slice(0, 200)) || (/External Id/.test(head) && /\(Instr\)/.test(head))) return 'teaching';
                 if (/name_last|hours working in mrr/i.test(firstLine)) return 'mrr';
             } catch (err) {
@@ -1234,7 +1234,7 @@
             if (!list) return;
             list.innerHTML = '';
             const rows = [
-                ['Survey (Qualtrics)', files.people.length ? files.people.map(f => f.name).join(', ') : null, true],
+                ['Survey(s) (Qualtrics)', files.people.length ? files.people.map(f => f.name).join(', ') : null, true],
                 ['Offerings (UniTime)', files.teaching ? files.teaching.name : null, true],
                 ['MRR-only TAs', files.mrr ? files.mrr.name : null, false]
             ];

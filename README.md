@@ -40,7 +40,7 @@ The start screen asks only how you want to begin. After the roster is loaded, th
 
 | Step | What happens |
 | :--- | :--- |
-| **1. Choose a source** | Upload a consolidated roster CSV, drop the raw department files (Qualtrics + UniTime + MRR list), build a roster manually, or load a saved session. |
+| **1. Choose a source** | Upload a consolidated roster CSV, drop the raw department files (Qualtrics survey(s) + UniTime + MRR list), build a roster manually, or load a saved session. |
 | **2. Review the roster** | Check instructors, required hours, preferences, and unavailable slots. |
 | **3. Configure the schedule** | Set operating days and times, scheduling priorities, and the courses that require coverage. |
 | **4. Generate and refine** | Create the initial schedule, review feasibility and coverage alerts, then drag, swap, save, print, or export. |
@@ -145,7 +145,10 @@ The app accepts the consolidated CSV downloaded from the interface, or the depar
 
 `department-import.js` reads the **untouched** exports:
 
-- **Qualtrics survey export(s)**: all three header rows and all columns. Any mark in the availability grid counts (`X`, `x`, `XX`, `1`). Duplicate submissions collapse to the latest. Several surveys (e.g. main + TA-screening) can be combined.
+- **Qualtrics survey export(s)**: all three header rows and all columns. Two layouts are recognized:
+  - *continuing-TA survey*: one checkbox per (time, day) (`Q1_<row>_<day>`); any mark counts (`X`, `x`, `XX`, `1`);
+  - *TA-screening survey*: one column per time (`Q1_<row>`, labelled `Q1 - 01:30-02:20` on a 12-hour clock) whose value lists the unavailable days (`M,T,W,Th,F`).
+  In the fall, drop both. Repeat submissions (same PUID, e-mail, or name, in one survey or across both) collapse to the latest. Recipient names, embedded-data names, and the signature are all kept as aliases for matching.
 - **UniTime offerings export** for the whole department. Co-taught cells are split, and every hourly slot a class overlaps is blocked, including classes in non-MRR courses.
 - **Special MRR-only TAs**: paste names (one per line, optional hours) or drop the list CSV (`name_last`, `name_first`, hours).
 

@@ -2,7 +2,12 @@
  * the department already produces, so nobody has to hand-edit CSVs.
  *
  *   1. Qualtrics survey export(s), untouched (all three header rows, all columns).
- *      Two surveys (e.g. main survey + TA-screening survey) can be passed together.
+ *      Fall has two surveys with DIFFERENT layouts; both are recognized:
+ *        - continuing-TA survey: one checkbox per (time, day), columns Q1_<row>_<day>,
+ *          any mark ("X", "x", "XX", "1") = unavailable;
+ *        - TA-screening survey: one column per time row, Q1_<row>, whose value lists
+ *          the unavailable days, e.g. "M,W,F" or "T,Th".
+ *      Drop both together; people who answered more than once are merged.
  *   2. UniTime "offerings" export, untouched (the whole department).
  *   3. Special MRR-only TAs: either Dom's spreadsheet/CSV (name_last, name_first,
  *      hours) or simply a pasted list of names, one per line.
@@ -11,6 +16,7 @@
  *   - Only TAs teaching the listed MRR courses get MRR hours.
  *   - 15300/15800/16010/16020: one hour per two sections; other courses: one per section.
  *   - Faculty never appear in the TA survey, so "not in survey" means "not a TA".
+ *   - MA 15300 is normally taught by undergraduates/lecturers (no survey, no MRR).
  *   - LTLs do not work in the MRR.
  *   - Special MRR-only TAs work 10 hours.
  *
@@ -51,6 +57,14 @@
     const DAY_NAMES = { monday: 'Mon', tuesday: 'Tue', wednesday: 'Wed', thursday: 'Thu', friday: 'Fri', saturday: 'Sat', sunday: 'Sun' };
     const SURVEY_ROW_TIMES = ['07:30', '08:30', '09:30', '10:30', '11:30', '12:30', '13:30', '14:30', '15:30', '16:30'];
     const SURVEY_COL_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    // Day abbreviations used in the screening survey's day lists ("M,T,W,Th,F").
+    const DAY_TOKENS = {
+        m: 'Mon', mo: 'Mon', mon: 'Mon', monday: 'Mon',
+        t: 'Tue', tu: 'Tue', tue: 'Tue', tues: 'Tue', tuesday: 'Tue',
+        w: 'Wed', we: 'Wed', wed: 'Wed', wednesday: 'Wed',
+        th: 'Thu', r: 'Thu', thu: 'Thu', thur: 'Thu', thurs: 'Thu', thursday: 'Thu',
+        f: 'Fri', fr: 'Fri', fri: 'Fri', friday: 'Fri'
+    };
 
     // ---------- small helpers ----------
     const clean = v => String(v == null ? '' : v).trim();
@@ -114,6 +128,17 @@
         return Array.from(new Set(days)).sort((a, b) => order.indexOf(a) - order.indexOf(b));
     }
 
+    /* Screening-survey cell: "M,T,W,Th,F", "T,Th", "Th", "M W F"... -> ['Mon', ...]
+     * Unknown tokens are returned separately so they can be reported. */
+    function parseDayList(text) {
+        const days = new Set(), unknown = [];
+        clean(text).split(/[\s,;/&]+/).filter(Boolean).forEach(tok => {
+            const d = DAY_TOKENS[tok.toLowerCase().replace(/\.$/, '')];
+            if (d) days.add(d); else unknown.push(tok);
+        });
+        return { days: Array.from(days), unknown };
+    }
+
     /* "TTh 10:30a-11:45a" -> { days:[Tue,Thu], start:630, end:705 } */
     function parseMeeting(timeText) {
         const m = clean(timeText).match(/^([A-Za-z]+)\s+(\d{1,2}:\d{2}\s*[ap]?)\s*-\s*(\d{1,2}:\d{2}\s*[ap]?)/i);
@@ -140,9 +165,10 @@
     }
 
     // ---------- names ----------
-    /* Accepts "Last, First Middle" or "First Middle Last". */
+    /* Accepts "Last, First Middle" or "First Middle Last". Underscores (Qualtrics
+     * recipient lists write "De_Alba") count as spaces. */
     function splitName(raw) {
-        const text = clean(raw).replace(/\(instr\)/ig, '').replace(/\s+/g, ' ').trim();
+        const text = clean(raw).replace(/\(instr\)/ig, '').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
         if (!text) return { first: '', last: '' };
         if (text.includes(',')) {
             const [last, ...rest] = text.split(',');
@@ -157,13 +183,14 @@
         return person.first ? `${person.last}, ${person.first}` : person.last;
     }
 
-    /* Score how well an offerings/MRR name fits a survey person. 0 = no match.
-     * Deliberately conservative: a last-name match alone is NOT enough when the
-     * first names disagree, so a TA without a survey is reported instead of
-     * silently inheriting a classmate's availability. */
-    function matchScore(target, person) {
+    /* Score how well an offerings/MRR name fits ONE name of a survey person.
+     * 0 = no match. Deliberately conservative: a last-name match alone is NOT
+     * enough when the first names disagree, so a TA without a survey is reported
+     * instead of silently inheriting a classmate's availability. */
+    function nameScore(target, person) {
         const tLast = compact(target.last), tFirst = nameTokens(target.first);
         const pLast = compact(person.last), pFirst = nameTokens(person.first);
+        if (!tLast || !pLast) return 0;
         const tAll = new Set([...nameTokens(target.last), ...tFirst]);
         const pAll = new Set([...nameTokens(person.last), ...pFirst]);
         const firstCompatible = () => {
@@ -171,23 +198,33 @@
             if (tFirst.some(t => pFirst.includes(t))) return true;
             const a = compact(target.first), b = compact(person.first);
             if (a && b && (a.startsWith(b) || b.startsWith(a))) return true;
+            // Short form of a first name: "Will" / "William", "Alex" / "Alexander".
+            if (tFirst.some(t => pFirst.some(p => t.length >= 3 && p.length >= 3 && (t.startsWith(p) || p.startsWith(t))))) return true;
             return levenshtein(tFirst[0], pFirst[0]) <= 1 && tFirst[0].length >= 4;
         };
 
         // Same last name (accents/hyphens/spaces ignored), compatible first name.
-        if (tLast && tLast === pLast && firstCompatible()) return 100;
+        if (tLast === pLast && firstCompatible()) return 100;
         // Compound surname shortened on one side ("Moran Lamas" vs "Moran").
-        if (tLast && pLast && tLast.length >= 4 && pLast.length >= 4 &&
+        if (tLast.length >= 4 && pLast.length >= 4 &&
             (tLast.startsWith(pLast) || pLast.startsWith(tLast)) && firstCompatible() &&
             tFirst.length && pFirst.length) return 85;
-        // Survey respondent typed first/last in the wrong boxes.
+        // Respondent typed first/last in the wrong boxes.
         if (tAll.size >= 2 && [...tAll].every(t => pAll.has(t)) && [...pAll].every(t => tAll.has(t))) return 90;
         const pFlip = { first: person.last, last: person.first };
         if (compact(pFlip.last) === tLast && nameTokens(pFlip.first).some(t => tFirst.includes(t))) return 90;
-        // One-letter typo in the surname, same first name.
+        // One-letter typo in the surname ("Ashamallah" / "Ashmallah"), same first name.
         if (tLast.length >= 5 && levenshtein(tLast, pLast) === 1 && tFirst.length && pFirst.length &&
             tFirst.some(t => pFirst.includes(t))) return 75;
         return 0;
+    }
+
+    /* A survey person can be known by several names: the Qualtrics recipient name,
+     * the embedded-data name, and the signature (which may be a legal name that
+     * differs from the preferred one, e.g. "Henry He" signing "Xiaoyan He"). */
+    function matchScore(target, person) {
+        const names = person.aliases && person.aliases.length ? person.aliases : [person];
+        return Math.max(0, ...names.map(n => nameScore(target, n)));
     }
 
     function findPerson(name, people) {
@@ -203,83 +240,166 @@
 
     // ---------- Qualtrics ----------
     function isQualtricsExport(rows) {
-        const h = (rows && rows[0]) || [];
-        return h.includes('ResponseId') || h.some(c => /^Q1_\d+_\d+$/.test(clean(c)));
+        const h = ((rows && rows[0]) || []).map(clean);
+        return h.includes('ResponseId') || h.some(c => /^Q1_\d+(_\d+)?$/.test(c));
+    }
+
+    /* Works out how a survey stores availability.
+     *   grid:    [{ i, slot }]  one checkbox column per (time, day)
+     *   rowCols: [{ i, time }]  one column per time; the cell lists the days */
+    function availabilityLayout(ids, labels) {
+        const grid = [], rowCols = [];
+        ids.forEach((id, i) => {
+            const lab = labels[i] || '';
+            // Continuing-TA survey label: "... - 7:30am-8:20am - Monday"
+            const m = lab.match(/(\d{1,2}):(\d{2})\s*(am|pm)\s*-\s*\d{1,2}:\d{2}\s*(?:am|pm)\s*-\s*(\w+)\s*$/i);
+            if (m && DAY_NAMES[m[4].toLowerCase()]) {
+                const start = toMinutes(`${m[1]}:${m[2]}${m[3][0]}`);
+                grid.push({ i, slot: `${DAY_NAMES[m[4].toLowerCase()]} ${hhmm(start)}` });
+                return;
+            }
+            const q = id.match(/^Q1_(\d+)_(\d+)$/);
+            if (q && SURVEY_ROW_TIMES[q[1] - 1] && SURVEY_COL_DAYS[q[2] - 1]) {
+                grid.push({ i, slot: `${SURVEY_COL_DAYS[q[2] - 1]} ${SURVEY_ROW_TIMES[q[1] - 1]}` });
+                return;
+            }
+            // Screening survey: id "Q1_3", label "Q1 - 09:30-10:20" (12-hour clock, no am/pm).
+            const r = id.match(/^Q1_(\d+)$/);
+            if (r) {
+                let time = SURVEY_ROW_TIMES[r[1] - 1] || null;
+                const lm = lab.match(/(\d{1,2}):(\d{2})\s*-\s*\d{1,2}:\d{2}/);
+                if (lm) {
+                    let h = parseInt(lm[1], 10);
+                    if (h < 7) h += 12; // "01:30" in a 7:30am-5:20pm grid is 1:30pm
+                    time = hhmm(h * 60 + parseInt(lm[2], 10));
+                }
+                if (time) rowCols.push({ i, time });
+            }
+        });
+        return { grid, rowCols };
     }
 
     /* rows: array of arrays (Papa.parse with header:false). Returns one record per
      * person (latest response wins when someone submitted twice). */
     function parseQualtrics(rows, sourceName = 'survey') {
+        return mergePeople(readQualtricsRows(rows, sourceName));
+    }
+
+    function readQualtricsRows(rows, sourceName) {
         if (!isQualtricsExport(rows)) throw new Error(`${sourceName} does not look like a Qualtrics export`);
         const ids = rows[0].map(clean);
         const labels = (rows[1] || []).map(clean);
         const col = id => ids.indexOf(id);
-        const firstCol = (...cands) => cands.map(col).find(i => i >= 0);
+        const firstCol = (...cands) => { const i = cands.map(col).find(x => x >= 0); return i === undefined ? -1 : i; };
         const looksLikeImportRow = r => r.some(c => /^\{"ImportId"/.test(clean(c)));
         const looksLikeLabelRow = r => clean(r[col('ResponseId')]) === 'Response ID' || clean(r[0]) === 'Start Date';
+        const { grid, rowCols } = availabilityLayout(ids, labels);
 
-        // Map availability columns -> slot ids using the human label when present
-        // ("- 7:30am-8:20am - Monday"), otherwise Qualtrics' Q1_row_col numbering.
-        const gridCols = [];
-        ids.forEach((id, i) => {
-            const lab = labels[i] || '';
-            const m = lab.match(/(\d{1,2}):(\d{2})\s*(am|pm)\s*-\s*\d{1,2}:\d{2}\s*(?:am|pm)\s*-\s*(\w+)\s*$/i);
-            if (m && DAY_NAMES[m[4].toLowerCase()]) {
-                const start = toMinutes(`${m[1]}:${m[2]}${m[3][0]}`);
-                gridCols.push({ i, slot: `${DAY_NAMES[m[4].toLowerCase()]} ${hhmm(start)}` });
-                return;
-            }
-            const q = id.match(/^Q1_(\d+)_(\d+)$/);
-            if (q && SURVEY_ROW_TIMES[q[1] - 1] && SURVEY_COL_DAYS[q[2] - 1]) {
-                gridCols.push({ i, slot: `${SURVEY_COL_DAYS[q[2] - 1]} ${SURVEY_ROW_TIMES[q[1] - 1]}` });
-            }
-        });
+        const iLast = col('RecipientLastName'), iFirst = col('RecipientFirstName');
+        const iELast = col('embedded_data_Last name'), iEFirst = col('embedded_data_First name');
+        const iEmail = col('RecipientEmail'), iEEmail = col('embedded_data_Email');
+        // PUID: embedded data in the continuing survey; "- PUID (00xxx-xxxxx):" in screening.
+        let iPuid = col('embedded_data_puid');
+        if (iPuid < 0) iPuid = labels.findIndex(l => /-\s*PUID\b/i.test(l));
+        if (iPuid < 0) iPuid = col('Q3_3');
+        const iSig = col('Q10_1'), iDate = firstCol('RecordedDate', 'EndDate');
+        const iPref = col('Q5'), iRole = col('Q6');
+        const iNotes = [col('Q2'), col('Q18')].filter(i => i >= 0);
+        const iFinished = col('Finished');
 
-        const iLast = firstCol('RecipientLastName'), iFirst = firstCol('RecipientFirstName');
-        const iELast = firstCol('embedded_data_Last name'), iEFirst = firstCol('embedded_data_First name');
-        const iEmail = firstCol('RecipientEmail'), iEEmail = firstCol('embedded_data_Email');
-        const iPuid = firstCol('embedded_data_puid'), iPuid2 = firstCol('Q3_3');
-        const iSig = firstCol('Q10_1'), iDate = firstCol('RecordedDate', 'EndDate');
-        const iPref = firstCol('Q5'), iStatus = firstCol('Q28'), iRole = firstCol('Q6');
-        const iNotes = [firstCol('Q2'), firstCol('Q18')].filter(i => i >= 0);
-        const iFinished = firstCol('Finished');
-
-        const byKey = new Map();
+        const out = [];
         rows.slice(1).forEach(r => {
             if (!r || r.every(c => !clean(c))) return;
             if (looksLikeImportRow(r) || looksLikeLabelRow(r)) return;
             if (iFinished >= 0 && /^false$/i.test(clean(r[iFinished]))) return;
             const get = i => (i >= 0 ? clean(r[i]) : '');
 
-            let last = get(iLast) || get(iELast), first = get(iFirst) || get(iEFirst);
-            if (!last && get(iSig)) ({ first, last } = splitName(get(iSig)));
-            if (!last) return;
+            const aliases = [];
+            const addAlias = (first, last) => {
+                const n = splitName(last && first ? `${last}, ${first}` : (last || first));
+                if (n.last && !aliases.some(a => compact(a.last + a.first) === compact(n.last + n.first))) aliases.push(n);
+            };
+            addAlias(get(iFirst), get(iLast));
+            addAlias(get(iEFirst), get(iELast));
+            // A signature like "Matiana L De Alba" could have a one- or two-word surname; keep both readings.
+            if (get(iSig)) {
+                const sig = get(iSig).replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+                const words = sig.includes(',') ? null : sig.split(' ');
+                if (!words || words.length < 3) { const n = splitName(sig); addAlias(n.first, n.last); }
+                else [1, 2].forEach(k => addAlias(words.slice(0, -k).join(' '), words.slice(-k).join(' ')));
+            }
+            if (!aliases.length) return;
 
             const unavail = new Set();
-            gridCols.forEach(({ i, slot }) => { if (clean(r[i])) unavail.add(slot); }); // "X", "x", "XX", "1"...
+            const oddCells = [];
+            grid.forEach(({ i, slot }) => { if (clean(r[i])) unavail.add(slot); }); // "X", "x", "XX", "1"...
+            rowCols.forEach(({ i, time }) => {
+                const { days, unknown } = parseDayList(r[i]);
+                days.forEach(d => unavail.add(`${d} ${time}`));
+                if (unknown.length) oddCells.push(`${time}: "${clean(r[i])}"`);
+            });
 
-            const email = (get(iEmail) || get(iEEmail)).toLowerCase();
-            const puid = (get(iPuid) || get(iPuid2)).replace(/\D/g, '');
-            const role = get(iRole), status = get(iStatus);
-            const rec = {
-                first, last, email, puid,
+            const role = get(iRole);
+            out.push({
+                first: aliases[0].first, last: aliases[0].last, aliases,
+                email: (get(iEmail) || get(iEEmail)).toLowerCase(),
+                puid: get(iPuid).replace(/\D/g, ''),
                 signature: get(iSig),
                 pref: /^yes/i.test(get(iPref)) ? 'Yes' : /^no$/i.test(get(iPref)) ? 'No' : 'No preference',
                 unavail,
                 isLTL: /limited-term-lecturer/i.test(role),
-                status, role,
+                role,
                 notes: iNotes.map(get).filter(Boolean).join(' | '),
                 recorded: get(iDate),
+                oddCells,
                 source: sourceName
-            };
-            const key = puid || email || compact(`${last}${first}`);
-            const prev = byKey.get(key);
-            if (!prev || rec.recorded >= prev.recorded) {
-                if (prev) rec.replaced = (prev.replaced || 0) + 1;
-                byKey.set(key, rec);
-            }
+            });
         });
-        return Array.from(byKey.values());
+        return out;
+    }
+
+    /* Collapses repeat submissions (same PUID, email, or exact name), across one
+     * survey or several. The latest submission wins; the merged record remembers
+     * every name the person used so either one can be matched to UniTime. */
+    function mergePeople(records) {
+        const sorted = records.slice().sort((a, b) => String(a.recorded).localeCompare(String(b.recorded)));
+        const groups = [];
+        const index = new Map();
+        const keysOf = rec => [
+            rec.puid && rec.puid.length >= 8 ? `p:${rec.puid}` : null,
+            rec.email ? `e:${rec.email}` : null,
+            ...rec.aliases.map(a => `n:${compact(a.last)}|${compact(a.first)}`)
+        ].filter(Boolean);
+        sorted.forEach(rec => {
+            const keys = keysOf(rec);
+            const hit = keys.map(k => index.get(k)).find(g => g);
+            if (!hit) {
+                const g = { latest: rec, all: [rec] };
+                groups.push(g);
+                keys.forEach(k => index.set(k, g));
+                return;
+            }
+            hit.all.push(rec);
+            hit.latest = rec; // sorted by date, so this is the newest
+            keys.forEach(k => index.set(k, hit));
+        });
+        return groups.map(g => {
+            const rec = { ...g.latest };
+            const aliases = [];
+            g.all.slice().reverse().forEach(r => r.aliases.forEach(a => {
+                if (!aliases.some(x => compact(x.last + x.first) === compact(a.last + a.first))) aliases.push(a);
+            }));
+            rec.aliases = aliases;
+            rec.first = aliases[0].first;
+            rec.last = aliases[0].last;
+            rec.email = rec.email || (g.all.find(r => r.email) || {}).email || '';
+            rec.puid = rec.puid || (g.all.find(r => r.puid) || {}).puid || '';
+            if (g.all.length > 1) {
+                rec.replaced = g.all.length - 1;
+                rec.sources = Array.from(new Set(g.all.map(r => r.source)));
+            }
+            return rec;
+        });
     }
 
     // ---------- UniTime offerings ----------
@@ -302,7 +422,7 @@
             if (cells.map(clean).includes('Instructor') && cells.map(clean).includes('Time')) {
                 header = cells.map(clean); return;
             }
-            if (!offered || !header) return;
+            if (!offered) return;
             const iInstr = header.indexOf('Instructor'), iTime = header.indexOf('Time');
             const iRoom = header.indexOf('Room'), iExt = header.indexOf('External Id');
             const iLimit = header.indexOf('Limit');
@@ -377,25 +497,30 @@
      */
     function buildRoster({ surveys = [], surveyNames = [], offerings = [], mrr = '', rules = {} } = {}) {
         const R = { ...DEFAULT_RULES, ...rules, hoursPerSection: { ...DEFAULT_RULES.hoursPerSection, ...(rules.hoursPerSection || {}) } };
-        const people = [];
-        surveys.forEach((rows, i) => people.push(...parseQualtrics(rows, surveyNames[i] || `survey ${i + 1}`)));
+        const raw = [];
+        surveys.forEach((rows, i) => raw.push(...readQualtricsRows(rows, surveyNames[i] || `survey ${i + 1}`)));
+        const people = mergePeople(raw);
         const sections = parseOfferings(offerings);
         const mrrCourses = new Set(Object.keys(R.hoursPerSection).filter(c => R.hoursPerSection[c] > 0));
 
         const report = {
-            surveyResponses: people.length,
+            surveyResponses: raw.length,
+            surveyPeople: people.length,
             sectionsRead: sections.length,
             included: [],
             mrrOnly: [],
-            skippedNotInSurvey: [],      // usually faculty / coordinators
+            skippedNotInSurvey: [],      // faculty, coordinators, large lectures
             skippedLTL: [],
-            skippedUndergrad: [],         // e.g. MA 15300 undergraduate instructors
-            teachingNoSurvey: [],         // must be checked by a human
+            skippedUndergrad: [],        // e.g. MA 15300 undergraduate instructors
+            teachingNoSurvey: [],        // must be checked by a human
             fuzzyMatches: [],
             ambiguousMatches: [],
             sectionsWithoutInstructor: [],
             mrrNotInSurvey: [],
-            duplicateResponses: people.filter(p => p.replaced).map(displayName)
+            unreadableAvailability: people.filter(p => p.oddCells && p.oddCells.length)
+                .map(p => `${displayName(p)} \u2014 ${p.oddCells.join('; ')}`),
+            duplicateResponses: people.filter(p => p.replaced)
+                .map(p => `${displayName(p)} (${p.replaced + 1} responses${p.sources && p.sources.length > 1 ? ', both surveys' : ''})`)
         };
 
         // Gather every section each instructor teaches (all courses, for blocking).
@@ -429,7 +554,7 @@
             mrrSecs.forEach(s => { byCourse[s.course] = (byCourse[s.course] || 0) + 1; });
             const courseLabel = Object.entries(byCourse).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
                 .map(([c]) => c).join(' / ');
-            const summary = `${name} — ${Object.entries(byCourse).map(([c, n]) => `${c} ×${n}`).join(', ')}`;
+            const summary = `${name} \u2014 ${Object.entries(byCourse).map(([c, n]) => `${c} \u00d7${n}`).join(', ')}`;
             const required = hoursFor(byCourse, R);
             const teachingBlocks = new Set();
             secs.forEach(s => blockedSlots(s.meeting).forEach(x => teachingBlocks.add(x)));
@@ -439,8 +564,7 @@
             const { person, score, ambiguous } = findPerson(name, people);
             if (!person) {
                 // Faculty never take the TA survey. A sole instructor of small sections
-                // is almost certainly a TA whose survey is missing (e.g. the separate
-                // TA-screening survey was not uploaded) — that is worth a human look.
+                // is almost certainly a TA whose survey is missing \u2014 worth a human look.
                 if (!mrrSecs.every(taSized)) { report.skippedNotInSurvey.push(summary); return; }
                 if (mrrSecs.every(s => R.nonSurveyInstructorCourses.includes(s.course))) {
                     report.skippedUndergrad.push(summary);
@@ -452,13 +576,13 @@
                     name, course: courseLabel, sections: mrrSecs.length, required,
                     unavail: Array.from(teachingBlocks).sort(), isMRR: false, pref: 'No preference',
                     assignments: [], notes: '', email: '',
-                    importWarning: 'Not found in any uploaded survey — only teaching times are blocked.'
+                    importWarning: 'Not found in any uploaded survey \u2014 only teaching times are blocked.'
                 });
                 report.included.push({ name, summary, required, notes: '', warning: true });
                 return;
             }
-            if (ambiguous) report.ambiguousMatches.push(`${name} → ${displayName(person)} (check)`);
-            else if (score < 100) report.fuzzyMatches.push(`${name} → ${displayName(person)}`);
+            if (ambiguous) report.ambiguousMatches.push(`${name} \u2192 ${displayName(person)} (check)`);
+            else if (score < 100) report.fuzzyMatches.push(`${name} \u2192 ${displayName(person)}`);
             if (R.excludeLTL && person.isLTL) { report.skippedLTL.push(summary); return; }
 
             const unavail = new Set([...person.unavail, ...teachingBlocks]);
@@ -481,10 +605,10 @@
                 name, course: 'MRR', sections: m.hours, required: m.hours,
                 unavail: person ? Array.from(person.unavail).sort() : [], isMRR: true,
                 pref: person ? person.pref : 'No preference', assignments: [],
-                notes: person ? person.notes : '', email: person ? person.email : ''
+                notes: person ? person.notes : '', email: person ? person.email : '',
+                importWarning: person ? '' : 'Not found in any uploaded survey \u2014 no availability on file.'
             });
             report.mrrOnly.push({ name, required: m.hours, notes: person ? person.notes : '' });
-            if (!person) instructors[instructors.length - 1].importWarning = 'Not found in any uploaded survey \u2014 no availability on file.';
         });
 
         return { instructors, report, people, sections };
@@ -492,7 +616,7 @@
 
     const api = {
         DEFAULT_RULES, isQualtricsExport, isOfferingsExport, parseQualtrics, parseOfferings,
-        parseMrrList, parseMeeting, blockedSlots, splitName, findPerson, buildRoster
+        parseMrrList, parseMeeting, parseDayList, blockedSlots, splitName, findPerson, mergePeople, buildRoster
     };
     global.ShiftHappensImport = api;
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
